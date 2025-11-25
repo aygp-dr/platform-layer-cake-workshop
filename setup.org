@@ -436,31 +436,93 @@ Map dependencies for a sample microservices architecture
 """
 Exercise 1: Create a dependency map for your services
 """
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.dependency_analyzer import Service, DependencyType
-
-# TODO: Define your services
-services = {
-    # Example:
-    # "api-gateway": Service(
-    #     name="api-gateway",
-    #     layer=3,
-    #     dependencies={
-    #         "auth-service": DependencyType.HARD,
-    #         "logging": DependencyType.SOFT
-    #     }
-    # ),
-}
+from src.dependency_analyzer import Service, DependencyType, detect_circular_dependencies, validate_layering
 
 # Task 1: Add at least 5 services with dependencies
-# Task 2: Run circular dependency detection
-# Task 3: Fix any cycles found
+# We define a mix of services, including a deliberate circular dependency to demonstrate the issue.
+services = {
+    "load-balancer": Service(
+        name="load-balancer",
+        layer=3,
+        dependencies={"auth-service": DependencyType.HARD} # Circular risk if auth needs LB
+    ),
+    "auth-service": Service(
+        name="auth-service",
+        layer=2,
+        dependencies={"database": DependencyType.HARD}
+    ),
+    "database": Service(
+        name="database",
+        layer=1, # AWS RDS
+        dependencies={}
+    ),
+    "app-server": Service(
+        name="app-server",
+        layer=4,
+        dependencies={
+            "auth-service": DependencyType.HARD,
+            "database": DependencyType.HARD,
+            "logging": DependencyType.SOFT
+        }
+    ),
+    "logging": Service(
+        name="logging",
+        layer=5, 
+        dependencies={"database": DependencyType.HARD}
+    ),
+    # Introduce the classic deploy cycle.
+    "deployment-service": Service(
+        name="deployment-service",
+        layer=5,
+        dependencies={"artifact-store": DependencyType.HARD}
+    ),
+    "artifact-store": Service(
+        name="artifact-store",
+        layer=4,
+        dependencies={"deployment-service": DependencyType.HARD} # Cycle: needs deployment to be updated/managed
+    )
+}
+
+def run_exercise():
+    print("--- Task 2: Run circular dependency detection ---")
+    cycles = detect_circular_dependencies(services)
+    if cycles:
+        print(f"Found circular dependencies: {cycles}")
+    else:
+        print("No circular dependencies found.")
+
+    print("\n--- Task 3: Fix any cycles found ---")
+    # Fix: artifact-store should not hard-depend on deployment-service for its basic operation/recovery
+    print("Applying fix: Removing hard dependency from artifact-store to deployment-service (changing to SOFT)")
+    services["artifact-store"].dependencies["deployment-service"] = DependencyType.SOFT
+    
+    cycles_fixed = detect_circular_dependencies(services)
+    if cycles_fixed:
+        print(f"Still found cycles: {cycles_fixed}")
+    else:
+        print("Cycles eliminated!")
+
+    print("\n--- Verifying Layers ---")
+    violations = validate_layering(services)
+    if violations:
+        print("Found layer violations:")
+        for v in violations:
+            print(f"  {v}")
+    else:
+        print("No layer violations found.")
+
+if __name__ == "__main__":
+    run_exercise()
 #+end_src
 
 ** Exercise 2: Layer Assignment
 
 *** Goal
-Assign services to layers following the layer cake model
+Assign services to appropriate layers following the layer cake model
 
 *** Constraints
 - AWS/Cloud provider = Layer 1
@@ -471,8 +533,13 @@ Assign services to layers following the layer cake model
 """
 Exercise 2: Assign services to appropriate layers
 """
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-services = {
+from src.dependency_analyzer import Service, DependencyType, validate_layering
+
+services_data = {
     "database": {"current_layer": None, "dependencies": ["aws-rds"]},
     "auth": {"current_layer": None, "dependencies": ["database"]},
     "api": {"current_layer": None, "dependencies": ["auth", "database"]},
@@ -480,7 +547,7 @@ services = {
     "aws-rds": {"current_layer": 1, "dependencies": []},
 }
 
-def assign_layers(services):
+def assign_layers(services_data):
     """
     Assign each service to a layer based on dependencies
     
@@ -489,11 +556,67 @@ def assign_layers(services):
     2. Services depend only on lower layers
     3. Minimize layer count while respecting dependencies
     """
-    # TODO: Implement layer assignment algorithm
-    pass
+    print("Starting layer assignment...")
+    
+    # Reset layers (except fixed Layer 1)
+    for s in services_data.values():
+        if s.get("current_layer") != 1: 
+            s["current_layer"] = None
+            
+    changed = True
+    iteration = 0
+    while changed:
+        changed = False
+        iteration += 1
+        # Safe guard against infinite loops
+        if iteration > 100:
+            break
+            
+        for name, svc in services_data.items():
+            if svc["current_layer"] is not None:
+                continue
+                
+            # Check if all dependencies have layers
+            deps_resolved = True
+            max_dep_layer = 0
+            
+            for dep in svc["dependencies"]:
+                if dep not in services_data:
+                    # Skip unknown dependencies or assume they are external
+                    continue
+                    
+                if services_data[dep]["current_layer"] is None:
+                    deps_resolved = False
+                    break
+                max_dep_layer = max(max_dep_layer, services_data[dep]["current_layer"])
+            
+            if deps_resolved:
+                # Assign layer: strictly greater than max dependency
+                # If max_dep_layer is 0 (no deps), assign 2 (since 1 is cloud)
+                if max_dep_layer == 0:
+                     new_layer = 2
+                else:
+                     new_layer = max_dep_layer + 1
+                
+                svc["current_layer"] = new_layer
+                changed = True
+                print(f"Assigned {name} to Layer {new_layer}")
+
+    # Check for unassigned (cycles)
+    unassigned = [n for n, s in services_data.items() if s["current_layer"] is None]
+    if unassigned:
+        print(f"Could not assign layers to: {unassigned} (likely circular dependency)")
+    else:
+        print("\nLayer assignment complete:")
+        # Sort by layer
+        sorted_services = sorted(services_data.items(), key=lambda x: x[1]["current_layer"])
+        for n, s in sorted_services:
+            print(f"  Layer {s['current_layer']}: {n}")
 
 # Task: Implement assign_layers() function
 # Verify no layer violations exist
+if __name__ == "__main__":
+    assign_layers(services_data)
 #+end_src
 
 ** Exercise 3: Simulate Tabletop Exercise
@@ -506,12 +629,16 @@ Complete platform outage - recover services in order
 """
 Exercise 3: Simulate disaster recovery
 """
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from typing import Set
+from typing import Set, Dict
 import time
+from src.dependency_analyzer import Service, DependencyType
 
 class RecoverySimulation:
-    def __init__(self, services):
+    def __init__(self, services: Dict[str, Service]):
         self.services = services
         self.recovered = set()
         self.failed_attempts = []
@@ -534,4 +661,109 @@ class RecoverySimulation:
         """
         Attempt to recover a service
         """
-        if self.can
+        if self.can_recover(service_name):
+            print(f"Recovering {service_name}...")
+            # time.sleep(0.1) # Simulate time (commented out for speed)
+            self.recovered.add(service_name)
+            print(f"SUCCESS: {service_name} recovered.")
+            return True
+        else:
+            # print(f"FAILED: Cannot recover {service_name}, missing dependencies.")
+            self.failed_attempts.append(service_name)
+            return False
+
+    def run_recovery(self):
+        """
+        Attempt to recover all services until stable
+        """
+        print("Starting recovery simulation...")
+        print(f"Total services to recover: {len(self.services)}")
+        
+        iteration = 0
+        while len(self.recovered) < len(self.services):
+            iteration += 1
+            print(f"\n--- Iteration {iteration} ---")
+            progress = False
+            
+            remaining = [s for s in self.services if s not in self.recovered]
+            # Sort remaining by layer (low to high) to optimize recovery
+            # This simulates the 'bottom-up' approach
+            remaining.sort(key=lambda k: self.services[k].layer)
+            
+            for service_name in remaining:
+                if self.recover_service(service_name):
+                    progress = True
+            
+            if not progress:
+                print("\nCRITICAL FAILURE: Deadlock detected. Cannot recover remaining services.")
+                print(f"Unrecovered services: {remaining}")
+                return False
+                
+        print("\nALL SERVICES RECOVERED SUCCESSFULLY!")
+        return True
+
+if __name__ == "__main__":
+    # Setup services
+    # Using a valid layered architecture
+    services = {
+        "aws-infra": Service("aws-infra", 1, {}),
+        "iam": Service("iam", 2, {"aws-infra": DependencyType.HARD}),
+        "vpc": Service("vpc", 3, {"iam": DependencyType.HARD, "aws-infra": DependencyType.HARD}),
+        "database": Service("database", 4, {"vpc": DependencyType.HARD, "iam": DependencyType.HARD}),
+        "app-api": Service("app-api", 5, {"database": DependencyType.HARD}),
+        "frontend": Service("frontend", 6, {"app-api": DependencyType.HARD}),
+        # Optional circular dependency to test failure
+        # "circular-test": Service("circular-test", 5, {"frontend": DependencyType.HARD}),
+    }
+    
+    # Inject bad dependency to test failure if needed
+    # services["aws-infra"].dependencies["frontend"] = DependencyType.HARD 
+    
+    sim = RecoverySimulation(services)
+    sim.run_recovery()
+#+end_src
+
+* Tools & Resources
+
+** Open Source Chaos Tools
+
+*** Production & Kubernetes
+- [[https://chaos-mesh.org/][Chaos Mesh]]: Kubernetes-native, rich dashboard, deep fault injection.
+- [[https://litmuschaos.io/][LitmusChaos]]: CI/CD integration, "Chaos Hub" for experiments.
+
+*** Infrastructure as Code
+- [[https://chaostoolkit.org/][Chaos Toolkit]]: Driver-based framework for AWS, Azure, Terraform.
+- [[https://localstack.cloud/][LocalStack]]: Fault injection for simulated AWS services.
+
+*** Networking & Messaging
+- [[https://github.com/shopify/toxiproxy][Toxiproxy]]: Simulates network conditions (latency, bandwidth) for Kafka/RabbitMQ.
+- [[https://github.com/alexei-led/pumba][Pumba]]: Chaos testing for Docker containers.
+
+* Related Workshops & References
+
+** Workshops
+- [[https://github.com/azuredevcollege/chaos-eng-workshop][Azure Chaos Engineering Workshop]]: Kubernetes-based challenges.
+- [[https://github.com/grace-maarten/platform-engineering-101][Platform Engineering 101]]: Red Hat Developer Hub focus.
+
+** Reading List
+- [[https://github.com/dastergon/awesome-chaos-engineering][Awesome Chaos Engineering]]: Curated list of resources.
+- [[https://github.com/dastergon/awesome-sre][Awesome SRE]]: Site Reliability Engineering resources.
+
+* Running the Workshop
+
+** Prerequisites
+- Python 3.9+
+- Make
+- Emacs (optional, for Org mode)
+
+** Commands
+#+begin_src bash
+# Setup directories
+make setup
+
+# Run all exercises
+make test
+
+# Tangle code (requires Emacs)
+make tangle
+#+end_src
