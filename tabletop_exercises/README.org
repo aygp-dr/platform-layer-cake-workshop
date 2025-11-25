@@ -1,0 +1,45 @@
+#+TITLE: Platform Team Tabletop Exercise Guide
+#+AUTHOR: Platform Engineering Lead
+#+DATE: 2025
+#+OPTIONS: toc:t num:t
+
+* Introduction
+
+This repository contains a series of **Tabletop Exercises (TTX)** designed to test our team's understanding of Layered Architecture and Disaster Recovery processes.
+
+**Objective:** Identify gaps in our recovery playbooks and architectural dependencies without causing real downtime.
+
+* Roles and Responsibilities
+
+| Role | Description |
+|------|-------------|
+| **Facilitator** | Runs the session, introduces "Injects" (new information/failures), keeps time. |
+| **Incident Commander** | Leads the response team, makes final decisions. |
+| **Scribe** | Records the timeline, decisions made, and questions asked. |
+| **Service Owners** | Role-play as the owners of specific systems (DB, API, etc.). |
+
+* How to Run a Session
+
+1.  **Schedule**: Book 90 minutes. (60m exercise, 30m retro).
+2.  **Select Scenario**: Choose one of the scenarios in this directory.
+3.  **Briefing**: Review the "Steady State" and "Trigger Event".
+4.  **Execution**:
+    - Facilitator reveals "Injects" every 10-15 minutes.
+    - Team discusses response actions.
+    - *Constraint*: You cannot use tools that are marked as "DOWN".
+5.  **Debrief**: Complete the Post-Mortem section.
+
+* Available Scenarios
+
+1.  [[file:01_circular_dependency_deadlock.org][Scenario 01: The Ouroboros Deadlock]] - Core circular dependency failure.
+2.  [[file:02_deployment_darkness.org][Scenario 02: Deployment Darkness]] - Recovering when CI/CD is gone.
+3.  [[file:03_split_brain_data.org][Scenario 03: Split-Brain Data]] - Data layer inconsistencies and recovery.
+
+* Scoring Rubric
+
+| Level | Criteria |
+|-------|----------|
+| **Chaos** | Team panicked, no clear leader, circular blame. |
+| **Reactive** | Solved the issue, but relied on "heroics" or undocumented hacks. |
+| **Defined** | Followed a playbook, but found gaps or stale info. |
+| **Resilient** | clear command, playbook worked, layers respected. |

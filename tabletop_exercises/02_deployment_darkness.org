@@ -1,0 +1,66 @@
+#+TITLE: TTX-02: Deployment Darkness
+#+CATEGORY: Tabletop
+#+TAGS: ci-cd layer1 security
+#+STARTUP: showall
+
+* Event Metadata
+:PROPERTIES:
+:DIFFICULTY: Medium
+:ESTIMATED_TIME: 45 mins
+:LAYERS_AFFECTED: Layer 5 (Platform Services)
+:END:
+
+* Scenario Briefing
+
+A security vulnerability (CVSS 10.0) has been announced in `log4j`. The CISO mandates that *all* services must be patched and redeployed within 6 hours.
+However, the GitHub Actions (or Jenkins) control plane has just gone offline due to a DDoS attack on the provider.
+
+**Current State:**
+- **Production App:** Vulnerable.
+- **CI/CD Pipeline:** DOWN.
+- **Source Code:** Available (Git is working).
+- **AWS Console:** Accessible.
+
+* Phase 1: The Mandate (0-15 mins)
+
+**Situation:**
+You cannot run standard build/deploy pipelines. You have the code, but no automated way to ship it.
+
+**Inject 1:**
+"Security team reports active scanning attempts against our Load Balancers targeting the vulnerability. We cannot wait for the CI provider to recover."
+
+**Discussion Questions:**
+1.  How do we build the artifact without the CI server? (Local build?)
+2.  How do we trust a locally built artifact? (Signing/hashing?)
+3.  Do we have permissions to push directly to the Container Registry (ECR)?
+
+* Phase 2: The Manual Bypass (15-30 mins)
+
+**Situation:**
+The team decides to use "Emergency Deployment" procedures.
+
+**Inject 2:**
+"You try to push the docker image from a developer laptop to ECR. The push fails: `403 Forbidden`. The Write policy is restricted to the CI/CD IAM Role only."
+
+**Discussion Questions:**
+1.  Who has the permissions to assume the CI/CD role or modify the ECR policy?
+2.  Is this modification audited?
+3.  Can we use AWS CodeBuild as a backup Layer 1 service?
+
+* Phase 3: The Rollout (30-45 mins)
+
+**Situation:**
+We have the image in ECR. Now we need to update the running services (ECS/EKS).
+
+**Inject 3:**
+"We updated the Kubernetes Deployment manifest. However, `kubectl apply` is gated by an Admission Controller that verifies image signatures from the CI system. The manual image is unsigned."
+
+**Action Items:**
+- [ ] Determine if we can disable the Admission Controller (Emergency Break Glass).
+- [ ] Weigh the risk: Running unsigned code vs. Running vulnerable code.
+
+* Post-Mortem / Debrief
+
+**Critical Analysis:**
+- Is our "Secure Supply Chain" too rigid for emergencies?
+- Do we have a "Layer 1" backup for "Layer 5" CI tools?

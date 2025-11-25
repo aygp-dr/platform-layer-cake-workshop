@@ -1,0 +1,72 @@
+#+TITLE: TTX-01: The Ouroboros Deadlock
+#+CATEGORY: Tabletop
+#+TAGS: dependency recovery critical
+#+STARTUP: showall
+
+* Event Metadata
+:PROPERTIES:
+:DIFFICULTY: Hard
+:ESTIMATED_TIME: 60 mins
+:LAYERS_AFFECTED: Layer 4 (Infra), Layer 5 (Platform)
+:END:
+
+* Scenario Briefing
+
+It is 3:00 AM on a Saturday. PagerDuty fires for "Artifactory Unreachable". Simultaneously, the "Micros" orchestration service begins failing health checks.
+
+**Current State:**
+- **Artifactory** (Layer 4) is DOWN. Disk full error.
+- **Micros** (Layer 5) is UNHEALTHY. It cannot pull container images.
+- **Deployment Pipeline** is BLOCKED.
+
+* Phase 1: Discovery (0-15 mins)
+
+**Situation:**
+The Incident Commander (IC) attempts to restart Artifactory to clear the disk error.
+
+**Inject 1 (Facilitator Read out):**
+"You attempt to redeploy the Artifactory cluster using Micros. The deployment job fails immediately with error: `ImagePullBackOff: registry.internal/artifactory:v2.4.1 not found`."
+
+**Discussion Questions:**
+1.  How do we deploy a fix to Artifactory if Artifactory holds the images needed to deploy?
+2.  Do we have a "Break Glass" mechanism to bypass Micros?
+3.  Where are the backup images stored?
+
+* Phase 2: Escalation (15-30 mins)
+
+**Situation:**
+The team realizes the circular dependency. Micros needs Artifactory to run; Artifactory needs Micros to deploy.
+
+**Inject 2:**
+"A developer suggests manually SSHing into the Artifactory nodes to clear logs. However, the nodes are immutable and managed by an Auto Scaling Group. Terminating a node causes a new one to launch, which fails to provision because it can't pull the `user-data` script hosted on... Artifactory."
+
+**Discussion Questions:**
+1.  Is there a Layer 1 (AWS) solution available?
+2.  Can we mount an EBS volume to a temporary EC2 instance to modify the data?
+3.  Who has SSH keys for the underlying hosts?
+
+* Phase 3: Recovery (30-45 mins)
+
+**Situation:**
+The team must identify the "Lowest Layer" recovery path.
+
+**Inject 3:**
+"The VP of Engineering asks if we can route traffic to the DR region. However, the DR region requires a 'Cold Start' hydration script to run, which pulls its config from the primary region's Artifactory."
+
+**Action Items:**
+- [ ] Define the manual recovery procedure (Bypassing Layer 5).
+- [ ] Identify the "Bootstrap" artifact location (S3?).
+
+* Post-Mortem / Debrief
+
+**Critical Analysis:**
+- Did we identify the circular dependency immediately?
+- Did we try to use tools (Micros) that were effectively down?
+- How do we break this cycle in the architecture (Move Artifactory to Layer 3/Independent)?
+
+**Score:**
+| Metric | Score (1-5) | Notes |
+|--------|-------------|-------|
+| Detection Time | | |
+| Playbook Accuracy | | |
+| Layer Adherence | | |

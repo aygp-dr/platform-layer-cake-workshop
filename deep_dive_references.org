@@ -1,0 +1,82 @@
+#+TITLE: Deep Dive: Industry Standards & References
+#+AUTHOR: Workshop Materials
+#+DATE: 2025
+#+STARTUP: overview
+
+* Overview
+
+As noted, the concepts in this workshop (Layered Architecture, Circular Dependencies, Blast Radius Reduction) are not new. They are foundational principles of distributed system design, codified by major tech organizations under different names.
+
+This document maps the workshop concepts to their industry-standard definitions, primarily focusing on **AWS Solutions**, **The Amazon Builders' Library**, and the **AWS Well-Architected Framework**.
+
+* Concept Mapping
+
+| Workshop Concept | AWS Terminology | Key Reference |
+|------------------|-----------------|---------------|
+| **Layer Cake / Layers** | **Fault Isolation Boundaries** | [[https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/abstract-and-introduction.html][AWS Fault Isolation Boundaries Whitepaper]] |
+| **Breaking Cycles** | **Static Stability** | [[https://aws.amazon.com/builders-library/static-stability-using-availability-zones/][Static stability using Availability Zones]] |
+| **Blast Radius** | **Cell-Based Architecture** | [[https://aws.amazon.com/solutions/guidance/cell-based-architecture-on-aws/][Guidance for Cell-Based Architecture on AWS]] |
+| **Circuit Breaking** | **Dependency Isolation** | [[https://aws.amazon.com/builders-library/dependency-isolation/][Using dependency isolation to contain concurrency overload]] |
+| **Safe Rollouts** | **Deployment Waves** | [[https://aws.amazon.com/builders-library/automating-safe-hands-off-deployments/][Automating safe, hands-off deployments]] |
+
+* Deep Dive Topics
+
+** 1. Static Stability vs. Circular Dependencies
+
+In the workshop, we discussed the "Micros vs. Artifactory" deadlock. AWS defines the solution to this as **Static Stability**.
+
+#+begin_quote
+"The most reliable recovery and mitigation mechanisms are the ones that require the fewest changes to achieve recovery."
+-- Amazon Builders' Library
+#+end_quote
+
+**The Core Principle:**
+- **Control Plane:** APIs that create/modify resources (e.g., "Deploy Service", "Launch EC2").
+- **Data Plane:** The actual running service (e.g., "Serve Traffic", "Running EC2 Instance").
+- **The Rule:** Your Data Plane should never depend on your Control Plane to recover from a localized failure.
+
+*Workshop Mapping:*
+- *Bad:* "I need to run a Deployment (Control Plane) to fix Artifactory (Data Plane)."
+- *Good:* "Artifactory recovers automatically because its config is baked into the image (Data Plane)."
+
+** 2. Cell-Based Architecture (The Ultimate Layering)
+
+If "Layered Architecture" is about vertical dependencies (N depends on N-1), **Cell-Based Architecture** is about horizontal isolation.
+
+**Definition:**
+A "Cell" is a complete, self-contained instance of your entire stack (Layers 1-7) that serves a specific subset of customers (partition key).
+
+**Benefits:**
+- **Blast Radius:** If a circular dependency exists and causes a deadlock, it only affects *one cell* (e.g., 5% of users), not the whole platform.
+- **Scale:** You scale by adding cells, not by making the database larger.
+
+**Reference Implementation:**
+AWS provides a [[https://github.com/aws-solutions-library-samples/guidance-for-cell-based-architecture-on-aws][Terraform/CDK reference implementation]] that demonstrates:
+- Router layer (thin, highly reliable).
+- Cell layer (complete independent stacks).
+- Control Plane layer (manages cells).
+
+** 3. Deployment Safety: The "Waves" Pattern
+
+In the workshop "Deployment Darkness" scenario, we discussed the risk of deploying globally. The industry standard for mitigating this is **Wave Deployments**.
+
+**The Pattern:**
+1.  **1-Box:** Deploy to a single host/container in a low-traffic region.
+2.  **Zonal Wave:** Deploy to one Availability Zone (AZ).
+3.  **Regional Wave:** Deploy to the rest of the Region.
+4.  **Global Wave:** Deploy to other regions.
+
+**Key Tool:**
+AWS defines this in **AWS Fault Isolation Boundaries**, explicitly stating that deployments should respect these boundaries to prevent "Global Service" failures.
+
+* Additional Reading List
+
+** The Amazon Builders' Library
+*Highly recommended for "Senior+" engineering reading.*
+- [[https://aws.amazon.com/builders-library/instrumenting-distributed-systems-for-operational-visibility/][Instrumenting distributed systems for operational visibility]] (Observability)
+- [[https://aws.amazon.com/builders-library/challenges-with-distributed-systems/][Challenges with distributed systems]] (General theory)
+- [[https://aws.amazon.com/builders-library/leader-election-in-distributed-systems/][Leader election in distributed systems]] (Consensus)
+
+** Google SRE Book
+- [[https://sre.google/sre-book/addressing-cascading-failures/][Addressing Cascading Failures]] - Direct equivalent to "Dependency Isolation".
+- [[https://sre.google/sre-book/load-balancing-datacenter/][Load Balancing at the Datacenter]] - Related to Cell-based routing.
