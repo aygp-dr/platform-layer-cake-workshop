@@ -1,0 +1,3 @@
+name: workshop-petstore
+runtime: python
+description: Event-Driven PetStore with Observability

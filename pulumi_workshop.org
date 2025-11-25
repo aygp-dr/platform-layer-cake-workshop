@@ -295,6 +295,160 @@ pulumi>=3.0.0
 pulumi-aws>=6.0.0
 #+end_src
 
+* Scenario 4: Event-Driven PetStore with Observability
+
+This advanced scenario builds a "Layer 4" application using:
+- **OpenAPI PetStore v3** (Contract-First Design)
+- **Event-Driven Architecture** (API -> EventBridge -> Lambda)
+- **Observability as Code** (Grafana Dashboards)
+
+** Architecture Layers
+1.  **Core Infrastructure**: VPC/Subnets (from Scenario 3)
+2.  **Event Bus**: AWS EventBridge
+3.  **Actor Layer**: Lambda Functions processing Pet events
+4.  **Observability**: Grafana Dashboard defined in Pulumi
+
+#+begin_src python :tangle pulumi/petstore/__main__.py
+"""
+Pulumi Stack: Event-Driven PetStore
+"""
+import json
+import pulumi
+import pulumi_aws as aws
+import pulumi_grafana as grafana
+
+# --- Layer 1: Event Bus ---
+bus = aws.cloudwatch.EventBus("petstore-bus")
+
+# --- Layer 2: Actor (Lambda) ---
+# This actor processes "CreatePet" events
+role = aws.iam.Role("actor-role", 
+    assume_role_policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Action": "sts:AssumeRole",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+            "Effect": "Allow"
+        }]
+    })
+)
+
+# Allow logging and tracing
+aws.iam.RolePolicyAttachment("basic-exec",
+    role=role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+)
+
+actor_func = aws.lambda_.Function("pet-actor",
+    code=pulumi.AssetArchive({
+        ".": pulumi.FileArchive("./actor")
+    }),
+    role=role.arn,
+    handler="actor.handler",
+    runtime="python3.9",
+    tracing_config={"mode": "Active"}, # Enable X-Ray/OpenTelemetry
+    environment={
+        "variables": {
+            "EVENT_BUS_NAME": bus.name
+        }
+    }
+)
+
+# Connect Bus -> Actor
+rule = aws.cloudwatch.EventRule("pet-create-rule",
+    event_bus_name=bus.name,
+    event_pattern=json.dumps({
+        "source": ["com.petstore"],
+        "detail-type": ["PetCreated"]
+    })
+)
+
+aws.cloudwatch.EventTarget("actor-target",
+    rule=rule.name,
+    event_bus_name=bus.name,
+    arn=actor_func.arn
+)
+
+aws.lambda_.Permission("allow-cloudwatch",
+    action="lambda:InvokeFunction",
+    function=actor_func.name,
+    principal="events.amazonaws.com",
+    source_arn=rule.arn
+)
+
+# --- Layer 3: API Gateway (OpenAPI) ---
+# We import the OpenAPI spec and inject the integration URI
+# Note: In a real world scenario, we'd template the URI into the YAML.
+# Here we simulate a simple proxy.
+
+api = aws.apigatewayv2.Api("petstore-api",
+    protocol_type="HTTP",
+    body=open("../../petstore.yaml").read()
+)
+
+# --- Layer 4: Observability as Code ---
+# Define a Grafana Dashboard for the PetStore
+# Note: Requires GRAFANA_AUTH and GRAFANA_URL env vars
+dashboard_json = json.dumps({
+    "title": "PetStore Observability",
+    "panels": [
+        {
+            "title": "Pet Actor Invocations",
+            "type": "graph",
+            "targets": [
+                {"expr": f"aws_lambda_invocations_total{{function_name='{actor_func.name}'}}"}
+            ]
+        },
+        {
+            "title": "Event Bus Traffic",
+            "type": "graph",
+            "targets": [
+                {"expr": f"aws_events_events_total{{event_bus='{bus.name}'}}"}
+            ]
+        }
+    ]
+})
+
+# Only create if configured (mocking for workshop safety)
+if pulumi.Config().get_bool("deploy_grafana"):
+    dashboard = grafana.Dashboard("petstore-dashboard",
+        config_json=dashboard_json
+    )
+
+pulumi.export("api_endpoint", api.api_endpoint)
+pulumi.export("dashboard_json", dashboard_json)
+#+end_src
+
+#+begin_src python :tangle pulumi/petstore/actor/actor.py
+import json
+
+def handler(event, context):
+    print(f"Received event: {json.dumps(event)}")
+    
+    # Simulate processing
+    detail = event.get('detail', {})
+    pet_id = detail.get('id')
+    
+    print(f"Processing Pet ID: {pet_id}")
+    
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"status": "processed", "pet_id": pet_id})
+    }
+#+end_src
+
+#+begin_src yaml :tangle pulumi/petstore/Pulumi.yaml
+name: workshop-petstore
+runtime: python
+description: Event-Driven PetStore with Observability
+#+end_src
+
+#+begin_src text :tangle pulumi/petstore/requirements.txt
+pulumi>=3.0.0
+pulumi-aws>=6.0.0
+pulumi-grafana>=0.1.0
+#+end_src
+
 * Execution Instructions
 
 ** 1. On-Prem (FreeBSD/Local)
@@ -318,5 +472,13 @@ pulumi up
 cd pulumi/aws
 pip install -r requirements.txt
 pulumi stack init aws
+pulumi up
+#+end_src
+
+** 4. Event-Driven PetStore
+#+begin_src bash
+cd pulumi/petstore
+pip install -r requirements.txt
+pulumi stack init petstore
 pulumi up
 #+end_src
