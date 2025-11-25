@@ -1,0 +1,322 @@
+#+TITLE: Layered Architecture Workshop with Pulumi
+#+AUTHOR: Workshop Materials
+#+DATE: 2025-11-25
+#+PROPERTY: header-args :mkdirp t
+#+STARTUP: overview
+
+* Overview
+
+This module demonstrates how to enforce and manage Layered Architecture using **Pulumi** across three distinct environments:
+1.  **On-Prem/Bare Metal** (FreeBSD focus)
+2.  **Hybrid** (Kubernetes)
+3.  **Cloud Native** (AWS + GitHub)
+
+We use Infrastructure as Code (IaC) to make dependencies *explicit* and prevent circular references at the infrastructure level.
+
+* Prerequisites
+
+- Pulumi CLI
+- Python 3.9+
+- AWS Credentials (for Cloud scenario)
+- Kubeconfig (for Hybrid scenario)
+
+* Scenario 1: On-Prem / Bare Metal (FreeBSD)
+
+In this scenario, we simulate a "Layered" deployment on a single FreeBSD host. We use Pulumi's local provider to manage filesystem resources and processes, treating the operating system as "Layer 0".
+
+** Goal:
+Use `uname -a` to verify the host, then provision a layered directory structure and configuration files, ensuring Layer N depends on Layer N-1.
+
+#+begin_src python :tangle pulumi/onprem/__main__.py
+"""
+Pulumi Stack: On-Prem / Bare Metal (FreeBSD Focus)
+"""
+import platform
+import pulumi
+from pulumi_command import local
+
+# 1. Verify Environment (Layer 0)
+# We want to ensure we are running on the expected architecture
+os_check = local.Command(
+    "os-check",
+    create="uname -a",
+    triggers=[platform.system()] # Re-run if platform changes (unlikely but good practice)
+)
+
+pulumi.export("host_info", os_check.stdout)
+
+# 2. Define Layers using Directory Structures
+
+# Layer 1: Storage (Base)
+# On FreeBSD, we might use ZFS datasets, but here we simulate with directories
+layer1_storage = local.Command(
+    "layer1-storage",
+    create="mkdir -p ./layers/storage/data",
+    delete="rm -rf ./layers/storage",
+    opts=pulumi.ResourceOptions(depends_on=[os_check])
+)
+
+# Layer 2: Configuration (Depends on Storage)
+# We write a config file that points to the storage layer
+config_content = 'STORAGE_PATH=./layers/storage/data\nDB_PORT=5432'
+layer2_config = local.Command(
+    "layer2-config",
+    create=f"mkdir -p ./layers/config && echo '{config_content}' > ./layers/config/app.conf",
+    delete="rm -rf ./layers/config",
+    opts=pulumi.ResourceOptions(depends_on=[layer1_storage])
+)
+
+# Layer 3: Application Service (Depends on Config)
+# We verify the config exists before "starting" the service
+layer3_service = local.Command(
+    "layer3-service",
+    create="cat ./layers/config/app.conf && echo 'Service Started' > ./layers/service.status",
+    delete="rm -f ./layers/service.status",
+    opts=pulumi.ResourceOptions(depends_on=[layer2_config])
+)
+
+# Violation Simulation (Optional)
+# Uncommenting this would create a circular dependency if Pulumi allowed it,
+# or a logic error if we try to make Storage depend on Service.
+#
+# bad_dependency = local.Command("bad", ..., opts=pulumi.ResourceOptions(depends_on=[layer3_service]))
+# layer1_storage.depends_on = [bad_dependency] # This would cause a cycle
+
+pulumi.export("service_status", layer3_service.stdout)
+#+end_src
+
+#+begin_src yaml :tangle pulumi/onprem/Pulumi.yaml
+name: workshop-onprem
+runtime: python
+description: A Pulumi program for FreeBSD/On-Prem Layered Architecture
+#+end_src
+
+#+begin_src text :tangle pulumi/onprem/requirements.txt
+pulumi>=3.0.0
+pulumi-command>=0.9.0
+#+end_src
+
+* Scenario 2: Hybrid (Kubernetes)
+
+In this scenario, we enforce layers using Kubernetes Namespaces and resource quotas.
+- Layer 1: Platform (Namespaces, Quotas)
+- Layer 2: Backing Services (Redis/Postgres)
+- Layer 3: Application
+
+#+begin_src python :tangle pulumi/hybrid/__main__.py
+"""
+Pulumi Stack: Hybrid (Kubernetes)
+"""
+import pulumi
+import pulumi_kubernetes as k8s
+
+# Layer 1: Foundation (Namespaces)
+ns = k8s.core.v1.Namespace(
+    "layer-cake-ns",
+    metadata={"name": "platform-layers"}
+)
+
+# Layer 2: Data Services (Mock Database)
+# Depends explicitly on Namespace
+db_labels = {"app": "mock-db"}
+db_deployment = k8s.apps.v1.Deployment(
+    "layer2-db",
+    metadata={
+        "namespace": ns.metadata["name"],
+        "name": "mock-database"
+    },
+    spec={
+        "selector": {"matchLabels": db_labels},
+        "replicas": 1,
+        "template": {
+            "metadata": {"labels": db_labels},
+            "spec": {
+                "containers": [{
+                    "name": "db",
+                    "image": "postgres:13-alpine",
+                    "env": [{"name": "POSTGRES_PASSWORD", "value": "example"}],
+                    "ports": [{"containerPort": 5432}]
+                }]
+            }
+        }
+    },
+    opts=pulumi.ResourceOptions(depends_on=[ns])
+)
+
+db_service = k8s.core.v1.Service(
+    "layer2-db-svc",
+    metadata={
+        "namespace": ns.metadata["name"],
+        "name": "database"
+    },
+    spec={
+        "ports": [{"port": 5432, "targetPort": 5432}],
+        "selector": db_labels
+    },
+    opts=pulumi.ResourceOptions(depends_on=[db_deployment])
+)
+
+# Layer 3: Application (Stateless)
+# Depends on DB Service availability (simulated by explicit depends_on)
+app_labels = {"app": "layer-app"}
+app_deployment = k8s.apps.v1.Deployment(
+    "layer3-app",
+    metadata={
+        "namespace": ns.metadata["name"],
+        "name": "layer-app"
+    },
+    spec={
+        "selector": {"matchLabels": app_labels},
+        "replicas": 2,
+        "template": {
+            "metadata": {"labels": app_labels},
+            "spec": {
+                "containers": [{
+                    "name": "app",
+                    "image": "nginx:alpine", # Placeholder for app
+                    "env": [
+                        {"name": "DB_HOST", "value": db_service.metadata["name"]}
+                    ]
+                }]
+            }
+        }
+    },
+    opts=pulumi.ResourceOptions(depends_on=[db_service])
+)
+
+pulumi.export("namespace", ns.metadata["name"])
+pulumi.export("db_url", db_service.metadata["name"])
+#+end_src
+
+#+begin_src yaml :tangle pulumi/hybrid/Pulumi.yaml
+name: workshop-hybrid
+runtime: python
+description: A Pulumi program for Hybrid/Kubernetes Layered Architecture
+#+end_src
+
+#+begin_src text :tangle pulumi/hybrid/requirements.txt
+pulumi>=3.0.0
+pulumi-kubernetes>=4.0.0
+#+end_src
+
+* Scenario 3: Cloud Native (AWS + GitHub)
+
+In this scenario, we build the "Golden Path" on AWS.
+- Layer 1: Networking (VPC) & Identity (IAM)
+- Layer 2: Storage (S3, DynamoDB)
+- Layer 3: Compute (Lambda)
+
+This stack demonstrates how Cloud resources inherently enforce layering (you need a Role to create a Lambda).
+
+#+begin_src python :tangle pulumi/aws/__main__.py
+"""
+Pulumi Stack: Cloud Native (AWS)
+"""
+import pulumi
+import pulumi_aws as aws
+import json
+
+# Layer 1: Identity (IAM)
+role = aws.iam.Role("layer1-role", 
+    assume_role_policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Action": "sts:AssumeRole",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+            "Effect": "Allow"
+        }]
+    })
+)
+
+# Layer 2: Storage (DynamoDB)
+# Independent of Compute, dependent on Region (Layer 0)
+table = aws.dynamodb.Table("layer2-table",
+    attributes=[{"name": "Id", "type": "S"}],
+    hash_key="Id",
+    read_capacity=1,
+    write_capacity=1
+)
+
+# Attach policy to Role (connecting Layer 1 and 2)
+policy = aws.iam.RolePolicy("layer1-policy",
+    role=role.id,
+    policy=table.arn.apply(lambda arn: json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+            "Resource": arn,
+            "Effect": "Allow"
+        }]
+    }))
+)
+
+# Layer 3: Compute (Lambda)
+# Hard Dependency on Role (L1) and Policy (L1/L2 link)
+# Soft Dependency on Table (env var config)
+lambda_func = aws.lambda_.Function("layer3-function",
+    code=pulumi.AssetArchive({
+        ".": pulumi.FileArchive("./app")
+    }),
+    role=role.arn,
+    handler="handler.handle",
+    runtime="python3.9",
+    environment={
+        "variables": {
+            "TABLE_NAME": table.name
+        }
+    },
+    opts=pulumi.ResourceOptions(depends_on=[policy])
+)
+
+pulumi.export("table_name", table.name)
+pulumi.export("function_arn", lambda_func.arn)
+#+end_src
+
+#+begin_src python :tangle pulumi/aws/app/handler.py
+import os
+import boto3
+
+def handle(event, context):
+    table_name = os.environ.get('TABLE_NAME')
+    return {
+        "statusCode": 200,
+        "body": f"Connected to Layer 2: {table_name}"
+    }
+#+end_src
+
+#+begin_src yaml :tangle pulumi/aws/Pulumi.yaml
+name: workshop-aws
+runtime: python
+description: A Pulumi program for AWS Cloud Native Layered Architecture
+#+end_src
+
+#+begin_src text :tangle pulumi/aws/requirements.txt
+pulumi>=3.0.0
+pulumi-aws>=6.0.0
+#+end_src
+
+* Execution Instructions
+
+** 1. On-Prem (FreeBSD/Local)
+#+begin_src bash
+cd pulumi/onprem
+pip install -r requirements.txt
+pulumi stack init onprem
+pulumi up
+#+end_src
+
+** 2. Hybrid (Kubernetes)
+#+begin_src bash
+cd pulumi/hybrid
+pip install -r requirements.txt
+pulumi stack init hybrid
+pulumi up
+#+end_src
+
+** 3. AWS Cloud
+#+begin_src bash
+cd pulumi/aws
+pip install -r requirements.txt
+pulumi stack init aws
+pulumi up
+#+end_src

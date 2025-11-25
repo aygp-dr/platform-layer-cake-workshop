@@ -12,10 +12,11 @@ setup:
 	@echo "Setup complete."
 
 tangle: setup
-	@echo "Tangling setup.org..."
+	@echo "Tangling setup.org and pulumi_workshop.org..."
 	@# Ideally checks for emacs, otherwise warns
 	@if command -v emacs >/dev/null 2>&1; then \
 		emacs setup.org --batch -f org-babel-tangle; \
+		emacs pulumi_workshop.org --batch -f org-babel-tangle; \
 	else \
 		echo "Emacs not found. Skipping automatic tangle. Ensure files are present."; \
 	fi

@@ -1,0 +1,3 @@
+name: workshop-onprem
+runtime: python
+description: A Pulumi program for FreeBSD/On-Prem Layered Architecture
